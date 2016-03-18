@@ -43,9 +43,7 @@ impl<A, S, D, F> Apply<F> for ArrayBase<S, D>
 {
 
     default fn apply(&mut self, f: F) {
-        for elt in self {
-            f(elt);
-        }
+        self.map_inplace(f);
     }
 }
 
@@ -61,29 +59,31 @@ impl<A, S, D, F> Apply<F> for ArrayBase<S, D>
     }
 }
 
-fn apply_helper<A, D, F>(array: ArrayViewMut<A, D>, f: &F)
+fn apply_helper<A, D, F>(mut array: ArrayViewMut<A, D>, f: &F)
     where D: Dimension,
           F: Fn(&mut A) + Sync,
           A: Send,
 {
     let len = array.len();
-    // find axis to split by
     if len > SPLIT_SIZE {
-        let mut split_axis = 0;
-        for (axis, &axis_len) in array.shape().iter().enumerate() {
+        // find axis to split by
+        // pick the axis with the largest stride (that has len > 1)
+        let mut strides = array.dim();
+        for (i, &s) in array.strides().iter().enumerate() {
+            strides.slice_mut()[i] = s as Ix;
+        }
+        let split_order = strides._fastest_varying_stride_order();
+        for &split_axis in split_order.slice().iter().rev() {
+            let axis_len = array.shape()[split_axis];
             if axis_len > 1 {
-                split_axis = axis;
+                let (a, b) = array.split_at(Axis(split_axis), axis_len / 2);
+                rayon::join(move || apply_helper(a, f), move || apply_helper(b, f));
                 break;
             }
         }
-        let len = array.shape()[split_axis];
-        let (a, b) = array.split_at(Axis(split_axis), len / 2);
-        rayon::join(move || apply_helper(a, f), move || apply_helper(b, f));
     } else {
         // sequential case
-        for elt in array {
-            f(elt)
-        }
+        array.map_inplace(f);
     }
 }
 
@@ -100,6 +100,17 @@ fn map_parallel(b: &mut Bencher) {
     let m = 1000;
     let n = 1000;
     let mut data = OwnedArray::linspace(0., 1., m * n).into_shape((m, n)).unwrap();
+    b.iter(|| {
+        apply(&mut data, |x| *x = f32::exp(*x));
+    })
+}
+
+#[bench]
+fn map_parallel_f(b: &mut Bencher) {
+    let m = 1000;
+    let n = 1000;
+    let mut data = OwnedArray::linspace(0., 1., m * n).into_shape((m, n)).unwrap();
+    data.swap_axes(0, 1);
     b.iter(|| {
         apply(&mut data, |x| *x = f32::exp(*x));
     })

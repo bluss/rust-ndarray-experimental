@@ -5,5 +5,5 @@ authors = ["bluss"]
 
 [dependencies]
 
-ndarray = "0.4.3"
-rayon = "*"
+ndarray = "0.4.4"
+rayon = "0.3.1"
