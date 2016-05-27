@@ -17,6 +17,7 @@ pub mod prelude {
         AsArray,
     };
 }
+use ndarray::Data;
 use ndarray::DataMut;
 
 use prelude::*;
@@ -87,6 +88,76 @@ fn apply_helper<A, D, F>(mut array: ArrayViewMut<A, D>, f: &F)
     }
 }
 
+pub fn fold<A, S, D, B, F, G>(array: &ArrayBase<S, D>, f: F, g: G) -> B
+    where S: Data<Elem=A>,
+          D: Dimension,
+          F: Fn(ArrayView<A, D>) -> B,
+          G: Fn(B, B) -> B,
+{
+    Fold::fold(array, f, g)
+}
+
+trait Fold<B, F, G> {
+    fn fold(&self, f: F, g: G) -> B;
+}
+
+impl<A, S, D, B, F, G> Fold<B, F, G> for ArrayBase<S, D>
+    where S: Data<Elem=A>,
+          D: Dimension,
+          F: Fn(ArrayView<A, D>) -> B,
+          G: Fn(B, B) -> B,
+{
+
+    default fn fold(&self, f: F, _: G) -> B {
+        f(self.view())
+    }
+}
+
+impl<A, S, D, B, F, G> Fold<B, F, G> for ArrayBase<S, D>
+    where S: Data<Elem=A>,
+          D: Dimension,
+          F: Fn(ArrayView<A, D>) -> B + Sync,
+          G: Fn(B, B) -> B + Sync,
+          A: Sync,
+          B: Send,
+{
+
+    fn fold(&self, f: F, g: G) -> B {
+        fold_helper(self.view(), &f, &g)
+    }
+}
+
+fn fold_helper<A, D, B, F, G>(array: ArrayView<A, D>, f: &F, g: &G) -> B
+    where D: Dimension,
+          F: Fn(ArrayView<A, D>) -> B + Sync,
+          G: Fn(B, B) -> B + Sync,
+          A: Sync,
+          B: Send,
+{
+    let len = array.len();
+    if len > SPLIT_SIZE {
+        // find axis to split by
+        // pick the axis with the largest stride (that has len > 1)
+        let mut strides = array.dim();
+        for (i, &s) in array.strides().iter().enumerate() {
+            strides.slice_mut()[i] = s as Ix;
+        }
+        let split_order = strides._fastest_varying_stride_order();
+        for &split_axis in split_order.slice().iter().rev() {
+            let axis_len = array.shape()[split_axis];
+            if axis_len > 1 {
+                let (a, b) = array.split_at(Axis(split_axis), axis_len / 2);
+                let (r1, r2) = rayon::join(move || fold_helper(a, f, g), move || fold_helper(b, f, g));
+                return g(r1, r2);
+            }
+        }
+        unreachable!()
+    } else {
+        // sequential case
+        f(array)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -128,5 +199,27 @@ fn map_not_parallel(b: &mut Bencher) {
             *x = f32::exp(*x);
             let _notsync = &c;
         });
+    })
+}
+
+#[bench]
+fn fold_parallel(b: &mut Bencher) {
+    let m = 10000;
+    let n = 1000;
+    let mut data = OwnedArray::linspace(0., 1., m * n).into_shape((m, n)).unwrap();
+    b.iter(|| {
+        fold(&mut data, |a| a.scalar_sum(), |x, y| x + y)
+    })
+}
+
+#[bench]
+fn fold_not_parallel(b: &mut Bencher) {
+    use std::cell::Cell;
+    let m = 10000;
+    let n = 1000;
+    let mut data = OwnedArray::linspace(0., 1., m * n).into_shape((m, n)).unwrap();
+    let c = Cell::new(0);
+    b.iter(|| {
+        fold(&mut data, |a| a.scalar_sum(), |x, y| { &c; x + y })
     })
 }
