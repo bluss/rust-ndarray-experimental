@@ -22,7 +22,7 @@ use ndarray::DataMut;
 
 use prelude::*;
 
-const SPLIT_SIZE: usize = 10000;
+const SPLIT_SIZE: usize = 1000;
 
 /// Apply a function to each element in the array
 pub fn apply<A, S, D, F>(array: &mut ArrayBase<S, D>, f: F)
