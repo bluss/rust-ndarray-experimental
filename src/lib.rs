@@ -3,24 +3,9 @@ extern crate ndarray;
 extern crate rayon;
 extern crate test;
 
-pub mod prelude {
-    pub use ndarray::{
-        ArrayView,
-        ArrayViewMut,
-        OwnedArray,
-        RcArray,
-        ArrayBase,
-        Dimension,
-        Ix, Ixs,
-        Axis,
-        NdFloat,
-        AsArray,
-    };
-}
+use ndarray::prelude::*;
 use ndarray::Data;
 use ndarray::DataMut;
-
-use prelude::*;
 
 const SPLIT_SIZE: usize = 1000;
 
@@ -165,6 +150,7 @@ mod tests {
     }
 }
 
+#[cfg(test)]
 use test::Bencher;
 #[bench]
 fn map_parallel(b: &mut Bencher) {
